@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="referrer" content="no-referrer">
+<title>Album Player</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#666;--bd:#ddd;--ac:#0a6cff;--hi:#eef4ff;--bad:#c0392b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111;--fg:#eee;--mut:#999;--bd:#333;--ac:#5a9dff;--hi:#1b2a42;--bad:#ff7a6b}}
+:root[data-theme=dark]{--bg:#111;--fg:#eee;--mut:#999;--bd:#333;--ac:#5a9dff;--hi:#1b2a42;--bad:#ff7a6b}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+#top{position:sticky;top:env(safe-area-inset-top,0px);background:var(--bg);z-index:5;border-bottom:1px solid var(--bd)}
+video{display:block;width:100%;max-height:45vh;background:#000}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 12px}
+#title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+a.btn,button,select,input{font:inherit;color:inherit}
+a.btn,button,select{min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);display:inline-flex;align-items:center;justify-content:center;text-decoration:none;cursor:pointer}
+button.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+input[type=url],input[type=text]{font-size:16px;min-height:44px;padding:0 12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);flex:1;min-width:0}
+.row{display:flex;gap:8px;padding:8px 12px;flex-wrap:wrap;align-items:center}
+#err{padding:10px 12px;background:var(--hi);border-top:1px solid var(--bd)}
+#err p{margin:0 0 8px;color:var(--bad)}
+#log{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;color:var(--mut);padding:0 12px}
+#st{color:var(--mut);padding:0 12px;font-size:13px}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;gap:10px;align-items:center;min-height:56px;padding:6px 12px;border-bottom:1px solid var(--bd);cursor:pointer}
+li.on{background:var(--hi)}li.bad .t{text-decoration:line-through;color:var(--bad)}
+li img{width:64px;height:40px;object-fit:cover;border-radius:6px;background:var(--bd);flex:none}
+.n{width:28px;color:var(--mut);font-size:12px;text-align:right;flex:none}
+.t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+label{display:inline-flex;align-items:center;gap:6px;min-height:44px}
+[hidden]{display:none!important}
+</style></head><body>
+<div id="top">
+<video id="v" controls autoplay playsinline></video>
+<div id="bar"><div id="title">Load an album to begin</div><a id="open" class="btn" target="_blank" rel="noopener" hidden>Open on Bunkr</a></div>
+<div id="err" hidden><p id="em"></p>
+<div class="row" style="padding:0 0 8px"><button id="retry">Retry</button><a id="open2" class="btn" target="_blank" rel="noopener">Open on Bunkr</a></div>
+<div class="row" style="padding:0 0 8px"><input id="paste" type="url" placeholder="Paste fresh video link"><button id="pgo" class="p">Play</button></div>
+<a id="bm" class="btn" style="font-size:13px">Bookmarklet: copy signed URL (drag to bookmarks)</a></div>
+</div>
+<div class="row"><input id="url" type="url" placeholder="Album, /f/, /v/ or .mp4 URL" autocapitalize="off" autocorrect="off"><button id="go" class="p">Load</button></div>
+<div class="row"><button id="prev">&#9664; Prev</button><button id="next">Next &#9654;</button>
+<select id="spd" aria-label="Speed"></select>
+<select id="lp" aria-label="Loop"><option value="off">Loop: off</option><option value="all">Loop: all</option><option value="one">Loop: one</option></select>
+<label><input type="checkbox" id="auto"> Auto-advance</label><button id="test">Test</button><button id="clr">Clear</button></div>
+<div class="row"><input id="px" type="url" placeholder="Optional: your own proxy, e.g. https://x.workers.dev/?url=" autocapitalize="off"><button id="pxs">Save</button></div>
+<div id="st"></div><div id="log"></div><ul id="list"></ul>
+<script>
+const $=s=>document.querySelector(s),v=$('#v');
+const LS={get(k,d){try{const x=JSON.parse(localStorage.getItem(k));return x==null?d:x}catch{return d}},set(k,x){try{localStorage.setItem(k,JSON.stringify(x))}catch{}}};
+let S=Object.assign({q:[],i:0,speed:1,loop:'all',auto:true,src:''},LS.get('bap',{}));
+const save=()=>LS.set('bap',S);
+const TTL=8*60e3,cache=new Map(),pend=new Map();
+const BASE=[['direct',u=>u],['allorigins',u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u)],['corsproxy',u=>'https://corsproxy.io/?'+encodeURIComponent(u)],['codetabs',u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u)],['thingproxy',u=>'https://thingproxy.freeboard.io/fetch/'+u]];
+const PX=[];let good=1;function setPX(){PX.length=0;const c=(S.px||'').trim();if(c)PX.push(['custom',u=>c+(/[=?]$/.test(c)?encodeURIComponent(u):u)]);PX.push(...BASE);good=c?0:1}setPX();
+async function tf(url,o={}){
+  const rest=PX.map((_,i)=>i),di=PX.findIndex(p=>p[0]==='direct'),order=o.only!=null?[o.only]:o.direct?[di,...rest.filter(i=>i!==di)]:[good,...rest.filter(i=>i!==good)];
+  for(const i of order){
+    try{const c=new AbortController(),t=setTimeout(()=>c.abort(),12000);
+      const r=await fetch(PX[i][1](url),{signal:c.signal});clearTimeout(t);
+      if(!r.ok)continue;const x=await r.text();
+      if(x.length>=(o.min||300)&&!/^\s*\{\s*"(error|contents)/.test(x)){good=i;return x}
+    }catch{}}
+  throw new Error('All proxies failed');
+}
+const VID=/\.(mp4|m4v|webm|mov|mkv|ts)(\?|#|$)/i,ANY=/\.([a-z0-9]{2,4})$/i;
+function parseAlbum(html,origin){
+  const d=new DOMParser().parseFromString(html,'text/html'),out=[];
+  d.querySelectorAll('a[href*="/f/"],a[href*="/v/"]').forEach(a=>{
+    const m=(a.getAttribute('href')||'').match(/\/[fv]\/([\w-]+)/);if(!m)return;
+    let t=(a.getAttribute('title')||a.querySelector('p,h3,h4,span')?.textContent||a.textContent||'').trim().replace(/\s+/g,' ');
+    const e=t.match(ANY);if(e&&!VID.test(t))return; // skip non-video files
+    const im=a.querySelector('img')?.getAttribute('src')||'';
+    out.push({id:m[1],title:t||m[1],page:origin+'/f/'+m[1],thumb:im&&!im.startsWith('data:')?new URL(im,origin).href:''});
+  });
+  if(!out.length){const s=new Set();for(const m of html.matchAll(/\/f\/([A-Za-z0-9]{6,})/g))if(!s.has(m[1])){s.add(m[1]);out.push({id:m[1],title:m[1],page:origin+'/f/'+m[1],thumb:''})}}
+  return out;
+}
+async function signCdn(cdn,sign,ref){
+  if(!sign)return cdn;
+  const su=new URL(sign,ref).href,u=new URL(cdn,ref);
+  for(const p of [u.pathname,u.pathname.replace(/^\//,''),u.href]){
+    try{const x=await tf(su+(su.includes('?')?'&':'?')+'path='+encodeURIComponent(p),{direct:1,min:2});
+      let j=null;try{j=JSON.parse(x)}catch{}
+      const o=j&&(j.data||j);
+      if(o&&typeof o==='object'){
+        if(o.url||o.signed_url)return new URL(o.url||o.signed_url,u).href;
+        if(o.token){u.searchParams.set('token',o.token);if(o.ex)u.searchParams.set('ex',o.ex);return u.href}
+      }else if(/^[?&]?token=/.test(x.trim()))return cdn+(cdn.includes('?')?'&':'?')+x.trim().replace(/^[?&]/,'');
+    }catch{}
+  }
+  throw new Error('Signing endpoint failed');
+}
+async function loadAny(raw){
+  raw=raw.trim();if(!raw)return;
+  if(!/^https?:\/\//i.test(raw))raw='https://'+raw;
+  let u;try{u=new URL(raw)}catch{return st('Invalid URL')}
+  S.src=raw;
+  if(VID.test(u.pathname)){S.q=[{id:'d'+Date.now(),title:decodeURIComponent(u.pathname.split('/').pop()),direct:raw,page:raw}];S.i=0;render();return play(0,true)}
+  const a=u.pathname.match(/^\/a\/([\w-]+)/),f=u.pathname.match(/^\/[fv]\/([\w-]+)/);
+  if(f){S.q=[{id:f[1],title:f[1],page:u.origin+'/f/'+f[1],thumb:''}];S.i=0;render();return play(0,true)}
+  if(!a)return st('Unrecognised link');
+  S.q=[];S.i=0;render();const seen=new Set();let first=true;
+  for(let p=1;p<=80;p++){
+    st('Reading album page '+p+'… ('+S.q.length+' files)');
+    let html;try{html=await tf(u.origin+'/a/'+a[1]+(p>1?'?page='+p:''))}catch(e){if(p===1)return st('Could not read album: '+e.message+'. Try Test.');break}
+    const n=parseAlbum(html,u.origin).filter(x=>!seen.has(x.id));
+    if(!n.length)break;n.forEach(x=>{seen.add(x.id);S.q.push(x)});render();
+    if(first&&S.q.length){first=false;play(0,true)}
+  }
+  st(S.q.length+' files loaded');save();
+}
+function meta(d,p){return d.querySelector('meta[property="'+p+'"],meta[name="'+p+'"]')?.getAttribute('content')||''}
+function resolve(it,force){
+  if(it.direct)return Promise.resolve({src:it.direct,t:Date.now()});
+  const c=cache.get(it.id);if(!force&&c&&Date.now()-c.t<TTL)return Promise.resolve(c);
+  if(pend.has(it.id)&&!force)return pend.get(it.id);
+  const pr=(async()=>{
+    const html=await tf(it.page),d=new DOMParser().parseFromString(html,'text/html');
+    let how='page',s='';
+    const js=n=>{const m=html.match(new RegExp('(?:var|let|const)\\s+'+n+'\\s*=\\s*[\'"]([^\'"]+)[\'"]'));return m?m[1].replace(/\\\//g,'/'):''};
+    const cdn=js('jsCDN'),sign=js('signUrl');
+    if(cdn){s=await signCdn(cdn,sign,it.page);how='jsCDN'+(sign?'+sign':'')}
+    if(!s)s=d.querySelector('video source[src]')?.getAttribute('src')||d.querySelector('video[src]')?.getAttribute('src')||meta(d,'og:video')||meta(d,'og:video:url')||meta(d,'og:video:secure_url');
+    if(!s){const m=html.match(/https?:\\?\/\\?\/[^"'\s<>\\]+(?:\\\/[^"'\s<>]+)*\.(?:mp4|m4v|webm|mov)[^"'\s<>]*/i);if(m)s=m[0].replace(/\\\//g,'/')}
+    if(!s){const im=meta(d,'og:image').replace('/thumbs/','/').replace(/\.(png|jpe?g|webp)$/i,'');if(VID.test(im)){s=await signCdn(im,sign,it.page);how='thumb'}}
+    if(!s)throw new Error('No video source found on page');
+    const r={how,src:new URL(s,it.page).href,poster:meta(d,'og:image')||d.querySelector('video')?.getAttribute('poster')||it.thumb||'',title:(meta(d,'og:title')||d.querySelector('h1')?.textContent||'').trim(),t:Date.now()};
+    cache.set(it.id,r);return r;
+  })().finally(()=>pend.delete(it.id));
+  pend.set(it.id,pr);return pr;
+}
+let pid=0,retried=false,chain=0;
+async function play(i,user){
+  if(i<0||i>=S.q.length)return;
+  const my=++pid,it=S.q[i];S.i=i;retried=false;if(user)chain=0;
+  $('#err').hidden=true;$('#title').textContent=it.title;$('#open').hidden=false;$('#open').href=$('#open2').href=it.page;
+  st('Resolving '+(i+1)+'/'+S.q.length+'…');render();save();
+  try{const r=await resolve(it);if(my!==pid)return;await setSrc(it,r);
+    const nx=S.q[i+1];if(nx)resolve(nx).catch(()=>{});}
+  catch(e){if(my===pid)fail(i,e.message)}
+}
+async function setSrc(it,r){
+  if(r.title&&it.title===it.id){it.title=r.title;$('#title').textContent=r.title;render()}
+  v.poster=r.poster||it.thumb||'';v.src=r.src;v.playbackRate=S.speed;v.loop=S.loop==='one';
+  v.play().catch(()=>{});st('');setMS(it,r);
+}
+function fail(i,msg){
+  S.q[i].bad=true;render();save();
+  if(chain>0&&chain<S.q.length){chain++;const n=nextIdx(i);if(n>=0){st('Skipped failed item');return play(n,false)}}
+  $('#em').textContent='Could not play this video ('+msg+').';$('#err').hidden=false;
+}
+function nextIdx(i){for(let k=1;k<=S.q.length;k++){const j=(i+k)%S.q.length;if(j<=i&&S.loop!=='all')return -1;if(!S.q[j].bad)return j}return -1}
+v.addEventListener('error',async()=>{
+  const i=S.i,it=S.q[i];if(!it||!v.src)return;
+  if(!retried){retried=true;const rm=document.querySelector('meta[name=referrer]');rm.content=rm.content==='no-referrer'?'strict-origin-when-cross-origin':'no-referrer';st('Link expired? Re-resolving…');try{const r=await resolve(it,true);await setSrc(it,r)}catch(e){fail(i,e.message)}}
+  else fail(i,'stream error');
+});
+v.addEventListener('ended',()=>{if(!S.auto||S.loop==='one')return;chain=1;const n=nextIdx(S.i);if(n>=0)play(n,false)});
+v.addEventListener('playing',()=>{S.q[S.i]&&(S.q[S.i].bad=false);chain=chain?1:0});
+function step(d){const n=S.i+d;if(n>=0&&n<S.q.length)play(n,true);else if(S.loop==='all'&&S.q.length)play((n+S.q.length)%S.q.length,true)}
+function setMS(it,r){try{if(!('mediaSession' in navigator))return;
+  navigator.mediaSession.metadata=new MediaMetadata({title:it.title,artwork:r.poster?[{src:r.poster}]:[]});
+  navigator.mediaSession.setActionHandler('previoustrack',()=>step(-1));navigator.mediaSession.setActionHandler('nexttrack',()=>step(1))}catch{}}
+function st(m){$('#st').textContent=m||''}
+function render(){
+  const ul=$('#list');ul.textContent='';
+  S.q.forEach((it,i)=>{const li=document.createElement('li');li.className=(i===S.i?'on ':'')+(it.bad?'bad':'');
+    li.innerHTML='<span class="n">'+(i+1)+'</span>'+(it.thumb?'<img loading="lazy" referrerpolicy="no-referrer" alt="">':'')+'<span class="t"></span>';
+    if(it.thumb)li.querySelector('img').src=it.thumb;li.querySelector('.t').textContent=it.title;
+    li.onclick=()=>play(i,true);ul.appendChild(li)});
+  ul.querySelector('.on')?.scrollIntoView({block:'nearest'});
+}
+$('#go').onclick=()=>loadAny($('#url').value);$('#url').onkeydown=e=>{if(e.key==='Enter')loadAny(e.target.value)};
+$('#prev').onclick=()=>step(-1);$('#next').onclick=()=>step(1);
+$('#retry').onclick=()=>{const it=S.q[S.i];if(!it)return;it.bad=false;cache.delete(it.id);play(S.i,true)};
+$('#pgo').onclick=()=>{const s=$('#paste').value.trim(),it=S.q[S.i];if(!s||!it)return;cache.set(it.id,{src:s,t:Date.now()});it.bad=false;$('#paste').value='';play(S.i,true)};
+$('#clr').onclick=()=>{S.q=[];S.i=0;save();render();v.removeAttribute('src');v.load();$('#title').textContent='Load an album to begin';$('#open').hidden=true;st('')};
+for(const s of [.5,.75,1,1.25,1.5,1.75,2])$('#spd').add(new Option(s+'x',s));
+$('#spd').value=S.speed;$('#spd').onchange=e=>{S.speed=+e.target.value;v.playbackRate=S.speed;save()};
+$('#lp').value=S.loop;$('#lp').onchange=e=>{S.loop=e.target.value;v.loop=S.loop==='one';save()};
+$('#auto').checked=S.auto;$('#auto').onchange=e=>{S.auto=e.target.checked;save()};
+v.addEventListener('loadedmetadata',()=>v.playbackRate=S.speed);
+$('#bm').href="javascript:(()=>{const e=document.querySelector('video source,video'),u=e&&(e.currentSrc||e.src||e.getAttribute('src'));if(!u)return alert('No video found on this page');navigator.clipboard.writeText(u).then(()=>alert('Signed URL copied'),()=>prompt('Copy this:',u))})()";
+$('#bm').onclick=e=>{e.preventDefault();alert('Drag this button to your bookmarks bar (or long-press > add bookmark). On a Bunkr file page, tap the bookmark, then paste here.')};
+$('#test').onclick=async()=>{
+  const L=$('#log');L.textContent='';const log=m=>L.textContent+=m+'\n';
+  let u;try{u=new URL(/^https?:/i.test($('#url').value.trim())?$('#url').value.trim():'https://'+($('#url').value.trim()||'bunkr.cr/a/NAj1sRnN'))}catch{return log('Bad URL')}
+  if(!/^\/[afv]\//.test(u.pathname))return log('Enter an /a/, /f/ or /v/ link first');
+  log('Fetching '+u.href);let html='';
+  for(let i=0;i<PX.length;i++){const t=performance.now();try{const x=await tf(u.href,{only:i});html=html||x;log('OK   '+PX[i][0]+' '+Math.round(performance.now()-t)+'ms, '+x.length+' bytes')}catch{log('FAIL '+PX[i][0])}}
+  if(!html)return log('No proxy returned the page. If you opened the claude.ai hosted copy, it cannot reach outside sites: host this file yourself. Otherwise add your own proxy above.');
+  if(u.pathname.startsWith('/a/')){const it=parseAlbum(html,u.origin);log('Files parsed on page 1: '+it.length);if(!it[0])return log('Parser found no /f/ links: page structure may differ.');
+    try{const r=await resolve(it[0],true);log('Resolved ['+r.how+'] "'+it[0].title+'" -> '+new URL(r.src).host+new URL(r.src).pathname.slice(0,40));
+      const p=document.createElement('video');p.preload='metadata';p.src=r.src;p.onloadedmetadata=()=>log('Browser can read stream: '+Math.round(p.duration)+'s');p.onerror=()=>log('Stream URL found but browser could not load it (hotlink protection or expired).')}catch(e){log('Resolve failed: '+e.message)}}
+};
+$('#px').value=S.px||'';$('#pxs').onclick=()=>{S.px=$('#px').value.trim();save();setPX();st('Proxy saved')};
+render();if(S.q.length){$('#title').textContent=S.q[S.i]?.title||'';st(S.q.length+' files restored. Tap one to play.')}
+if(S.src)$('#url').value=S.src;
+</script></body></html>
